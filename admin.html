@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Wishlist admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,500..700,100&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <span class="admin-tag">Admin</span>
+    <span style="display:flex;gap:6px;align-items:center">
+      <a class="nb" href="index.html" target="_blank" rel="noopener">View public page ↗</a>
+      <button class="nb" id="signout" style="display:none">Sign out</button>
+    </span>
+  </div>
+  <header><h1 id="title">Wishlist admin</h1></header>
+
+  <div id="login" class="panel" style="display:none">
+    <h2>Sign in</h2>
+    <form id="loginForm" style="display:grid;gap:10px">
+      <label>Email<input type="email" id="email" autocomplete="username" required></label>
+      <label>Password<input type="password" id="pw" autocomplete="current-password" required></label>
+      <button class="btn primary" type="submit">Sign in</button>
+    </form>
+  </div>
+
+  <div id="app" style="display:none">
+    <form id="form" class="panel">
+      <h2 id="fHead">Add an item</h2>
+      <label>Item name<input type="text" id="fTitle" maxlength="120" required placeholder="e.g. LEGO Technic Bugatti"></label>
+      <label>Shopping link<input type="url" id="fUrl" placeholder="https://…"></label>
+      <div class="row">
+        <label>Price<input type="text" id="fPrice" maxlength="20" placeholder="$29.99"></label>
+        <label>Priority<select id="fPrio"><option value="normal">Normal</option><option value="top">★ Top pick</option></select></label>
+      </div>
+      <label>Notes<textarea id="fNote" maxlength="300" placeholder="Size, color, model number…"></textarea></label>
+      <div class="drop" id="drop" tabindex="0"></div>
+      <input type="file" id="file" accept="image/*" style="display:none">
+      <div style="display:flex;gap:8px">
+        <button class="btn primary" type="submit" id="fSave">Add to list</button>
+        <button class="btn" type="button" id="fCancel" style="display:none">Cancel edit</button>
+      </div>
+    </form>
+    <div class="grid" id="list"></div>
+  </div>
+  <div class="status" id="status">Loading…</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script>
+(function(){
+  var cfg=window.WISHLIST_CONFIG||{};
+  var $=function(id){return document.getElementById(id)};
+  function h(tag,props,kids){var e=document.createElement(tag);for(var k in (props||{})){if(k==='text')e.textContent=props[k];else if(k==='class')e.className=props[k];else if(k.slice(0,2)==='on')e.addEventListener(k.slice(2),props[k]);else e.setAttribute(k,props[k])}(kids||[]).forEach(function(c){if(c)e.appendChild(c)});return e}
+  function safeUrl(u){try{var x=new URL(u);return (x.protocol==='https:'||x.protocol==='http:')?x.href:null}catch(e){return null}}
+  function host(u){try{return new URL(u).hostname.replace(/^www\./,'')}catch(e){return ''}}
+  function setStatus(t,err){var s=$('status');s.textContent=t;s.className='status'+(err?' err':'')}
+
+  if(!cfg.SUPABASE_URL||/YOUR_/.test(cfg.SUPABASE_URL)||!window.supabase){setStatus('Setup needed: add your Supabase details to config.js.',true);return}
+  var sb=window.supabase.createClient(cfg.SUPABASE_URL,cfg.SUPABASE_ANON_KEY);
+  var items=[],claims={},editing=null,pendingFile=null,pendingPreview=null,armed=null;
+  function imgUrl(p){return cfg.SUPABASE_URL+'/storage/v1/object/public/wishlist/'+p.split('/').map(encodeURIComponent).join('/')}
+
+  // ---------- auth ----------
+  async function showForSession(session){
+    $('login').style.display=session?'none':'';
+    $('app').style.display=session?'':'none';
+    $('signout').style.display=session?'':'none';
+    if(session){setStatus('');await load()}else setStatus('');
+  }
+  $('loginForm').addEventListener('submit',async function(e){
+    e.preventDefault();setStatus('Signing in…');
+    var r=await sb.auth.signInWithPassword({email:$('email').value.trim(),password:$('pw').value});
+    if(r.error){setStatus('Sign-in failed: '+r.error.message,true);return}
+    $('pw').value='';
+  });
+  $('signout').addEventListener('click',function(){sb.auth.signOut()});
+  sb.auth.onAuthStateChange(function(_e,session){showForSession(session)});
+  sb.auth.getSession().then(function(r){showForSession(r.data&&r.data.session)});
+
+  // ---------- data ----------
+  async function load(){
+    var r=await Promise.all([sb.from('items').select('*').order('created_at',{ascending:true}),sb.from('claims').select('*')]);
+    if(r[0].error||r[1].error){setStatus('Could not load the list.',true);return}
+    items=r[0].data||[];claims={};(r[1].data||[]).forEach(function(c){claims[c.item_id]=c});
+    renderList();
+  }
+  function closeMenus(){[].forEach.call(document.querySelectorAll('.menu'),function(m){m.remove()})}
+  document.addEventListener('click',closeMenus);
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')closeMenus()});
+
+  function renderList(){
+    var list=$('list');list.textContent='';
+    if(!items.length){list.appendChild(h('div',{class:'empty',text:'No items yet. Add the first one above.'}));return}
+    items.forEach(function(it){
+      var claim=claims[it.id],url=safeUrl(it.url);
+      var img=h('div',{class:'img'});
+      if(it.image_path)img.appendChild(h('img',{src:imgUrl(it.image_path),alt:'',loading:'lazy'}));else img.appendChild(h('span',{text:'🎁'}));
+      var m=h('div',{class:'meta'});
+      if(it.price)m.appendChild(h('span',{text:it.price}));
+      if(it.priority==='top')m.appendChild(h('span',{class:'pill top',text:'★ Top pick'}));
+      if(url)m.appendChild(h('span',{text:host(url)}));
+      var acts=h('div',{class:'actions'});
+      if(url)acts.appendChild(h('a',{class:'nb primary',href:url,target:'_blank',rel:'noopener noreferrer',text:'View'}));
+      if(claim)acts.appendChild(h('span',{class:'badge',text:'✓ Purchased'+(claim.by?' by '+claim.by:'')}));
+      var wrap=h('div',{class:'item adm'+(claim?' done':'')},[img,h('div',{class:'body'},[h('h3',{text:it.title}),m,it.note?h('p',{class:'note',text:it.note}):null,acts])]);
+      wrap.appendChild(h('button',{class:'kebab','aria-label':'More actions for '+it.title,'aria-haspopup':'true',text:'⋮',onclick:function(e){
+        e.stopPropagation();var was=!!wrap.querySelector('.menu');closeMenus();
+        if(!was)wrap.appendChild(h('div',{class:'menu',role:'menu'},[
+          h('button',{role:'menuitem',text:'Edit',onclick:function(){closeMenus();startEdit(it)}}),
+          h('button',{role:'menuitem',text:'Delete',onclick:function(){closeMenus();del(it)}})]));
+      }}));
+      list.appendChild(wrap);
+    });
+  }
+
+  // ---------- form ----------
+  function showDrop(){
+    var d=$('drop');d.textContent='';
+    var src=pendingPreview||(editing&&editing.image_path?imgUrl(editing.image_path):null);
+    if(src)d.appendChild(h('img',{src:src,alt:''}));
+    d.appendChild(h('div',{text:src?'Tap to replace the picture':'Add a picture: tap to choose, drop an image, or paste a copied one'}));
+  }
+  function take(f){if(!f||!/^image\//.test(f.type))return;pendingFile=f;pendingPreview=URL.createObjectURL(f);showDrop()}
+  $('drop').addEventListener('click',function(){$('file').click()});
+  $('file').addEventListener('change',function(){take($('file').files[0])});
+  $('drop').addEventListener('dragover',function(e){e.preventDefault();$('drop').classList.add('over')});
+  $('drop').addEventListener('dragleave',function(){$('drop').classList.remove('over')});
+  $('drop').addEventListener('drop',function(e){e.preventDefault();$('drop').classList.remove('over');take(e.dataTransfer.files[0])});
+  document.addEventListener('paste',function(e){var fs=e.clipboardData&&e.clipboardData.files;if(fs&&fs[0]&&$('app').style.display!=='none')take(fs[0])});
+
+  function resetForm(){
+    editing=null;pendingFile=null;pendingPreview=null;$('file').value='';
+    $('form').reset();$('fHead').textContent='Add an item';$('fSave').textContent='Add to list';$('fCancel').style.display='none';showDrop();
+  }
+  function startEdit(it){
+    editing=it;pendingFile=null;pendingPreview=null;
+    $('fTitle').value=it.title||'';$('fUrl').value=it.url||'';$('fPrice').value=it.price||'';$('fPrio').value=it.priority||'normal';$('fNote').value=it.note||'';
+    $('fHead').textContent='Edit item';$('fSave').textContent='Save changes';$('fCancel').style.display='';showDrop();
+    window.scrollTo({top:0,behavior:'smooth'});
+  }
+  $('fCancel').addEventListener('click',resetForm);
+
+  async function shrink(file,max){
+    var bmp=await createImageBitmap(file);var s=Math.min(1,max/Math.max(bmp.width,bmp.height));
+    var c=document.createElement('canvas');c.width=Math.round(bmp.width*s);c.height=Math.round(bmp.height*s);
+    c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);
+    return new Promise(function(res){c.toBlob(res,'image/jpeg',0.85)});
+  }
+
+  $('form').addEventListener('submit',async function(e){
+    e.preventDefault();var btn=$('fSave');btn.disabled=true;setStatus('Saving…');
+    try{
+      var u=$('fUrl').value.trim();
+      var data={title:$('fTitle').value.trim(),url:u?(safeUrl(u)||null):null,price:$('fPrice').value.trim()||null,priority:$('fPrio').value,note:$('fNote').value.trim()||null};
+      var oldPath=editing?editing.image_path:null,newPath=null;
+      if(pendingFile){
+        var blob=await shrink(pendingFile,1000);
+        newPath=(crypto.randomUUID?crypto.randomUUID():String(Date.now()))+'.jpg';
+        var up=await sb.storage.from('wishlist').upload(newPath,blob,{contentType:'image/jpeg',cacheControl:'31536000'});
+        if(up.error)throw up.error;
+        data.image_path=newPath;
+      }
+      var r=editing?await sb.from('items').update(data).eq('id',editing.id):await sb.from('items').insert(data);
+      if(r.error)throw r.error;
+      if(newPath&&oldPath)await sb.storage.from('wishlist').remove([oldPath]);
+      resetForm();setStatus('Saved.');await load();
+    }catch(err){setStatus('Could not save: '+((err&&err.message)||'unknown error'),true)}
+    btn.disabled=false;
+  });
+
+  async function del(it){
+    if(armed!==it.id){armed=it.id;setStatus('Tap Delete again to remove “'+it.title+'”.',true);setTimeout(function(){armed=null},4000);return}
+    armed=null;
+    var r=await sb.from('items').delete().eq('id',it.id);
+    if(r.error){setStatus('Could not delete: '+r.error.message,true);return}
+    if(it.image_path)await sb.storage.from('wishlist').remove([it.image_path]);
+    if(editing&&editing.id===it.id)resetForm();
+    setStatus('');await load();
+  }
+  showDrop();
+})();
+</script>
+</body>
+</html>

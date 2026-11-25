@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Orlando's Christmas Wishlist</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,500..700,100&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="tag">Christmas 2026</div>
+    <h1 id="title">Orlando's Christmas Wishlist</h1>
+    <p>Thank you for loving on our kiddo! Gifts are not necessary, but if you wish to get him something, here are some ideas of what he's currently into and loving, as well as some items he's picked out himself. If you do pick something up, please mark it as purchased so nobody doubles up.</p>
+  </header>
+
+  <div class="bar">
+    <div class="tabs" id="tabs">
+      <button class="tab" data-f="all" aria-pressed="true">All</button>
+      <button class="tab" data-f="open" aria-pressed="false">Still wanted</button>
+      <button class="tab" data-f="done" aria-pressed="false">Purchased</button>
+    </div>
+    <div class="count" id="count"></div>
+  </div>
+
+  <div class="grid" id="list"></div>
+  <div class="status" id="status">Loading…</div>
+</div>
+
+<dialog id="dlg">
+  <form method="dialog" id="dlgForm" style="display:grid;gap:12px">
+    <h2 id="dlgTitle" style="margin:0;font-family:'Fraunces',serif;font-size:20px"></h2>
+    <label>Your name (optional)<input type="text" id="dlgName" maxlength="60" placeholder="e.g. Aunt Maria"></label>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button type="button" class="btn" id="dlgCancel">Cancel</button>
+      <button type="submit" class="btn primary" id="dlgOk">Confirm</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script>
+(function(){
+  var cfg=window.WISHLIST_CONFIG||{};
+  var $=function(id){return document.getElementById(id)};
+  function h(tag,props,kids){var e=document.createElement(tag);for(var k in (props||{})){if(k==='text')e.textContent=props[k];else if(k==='class')e.className=props[k];else if(k.slice(0,2)==='on')e.addEventListener(k.slice(2),props[k]);else e.setAttribute(k,props[k])}(kids||[]).forEach(function(c){if(c)e.appendChild(c)});return e}
+  function safeUrl(u){try{var x=new URL(u);return (x.protocol==='https:'||x.protocol==='http:')?x.href:null}catch(e){return null}}
+  function host(u){try{return new URL(u).hostname.replace(/^www\./,'')}catch(e){return ''}}
+  function lsGet(k){try{return localStorage.getItem(k)||''}catch(e){return ''}}
+  function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+  function setStatus(t,err){var s=$('status');s.textContent=t;s.className='status'+(err?' err':'')}
+
+  var name=cfg.CHILD_NAME||'Orlando';
+  $('title').textContent=name+"'s Christmas Wishlist";document.title=$('title').textContent;
+
+  if(!cfg.SUPABASE_URL||/YOUR_/.test(cfg.SUPABASE_URL)||!window.supabase){setStatus('Setup needed: add your Supabase details to config.js.',true);return}
+  var sb=window.supabase.createClient(cfg.SUPABASE_URL,cfg.SUPABASE_ANON_KEY);
+  var items=[],claims={},filter='all',target=null;
+
+  function imgUrl(p){return cfg.SUPABASE_URL+'/storage/v1/object/public/wishlist/'+p.split('/').map(encodeURIComponent).join('/')}
+
+  async function load(){
+    try{
+      var r=await Promise.all([sb.from('items').select('*').order('created_at',{ascending:true}),sb.from('claims').select('*')]);
+      if(r[0].error||r[1].error)throw new Error('load');
+      items=r[0].data||[];claims={};(r[1].data||[]).forEach(function(c){claims[c.item_id]=c});
+      setStatus('');render();
+    }catch(e){setStatus('Could not load the list. Please refresh.',true)}
+  }
+
+  function render(){
+    var list=$('list');list.textContent='';
+    var shown=items.filter(function(i){var d=!!claims[i.id];return filter==='all'||(filter==='done'?d:!d)});
+    var openN=items.filter(function(i){return !claims[i.id]}).length;
+    $('count').textContent=items.length?(openN+' of '+items.length+' still wanted'):'';
+    if(!shown.length){list.appendChild(h('div',{class:'empty',text:items.length?'Nothing here yet.':'The list is empty for now. Check back soon!'}));return}
+    shown.forEach(function(it){list.appendChild(card(it))});
+  }
+
+  function card(it){
+    var claim=claims[it.id],url=safeUrl(it.url);
+    var img=h('div',{class:'img'});
+    if(it.image_path)img.appendChild(h('img',{src:imgUrl(it.image_path),alt:'',loading:'lazy'}));else img.appendChild(h('span',{text:'🎁'}));
+    var m=h('div',{class:'meta'});
+    if(it.price)m.appendChild(h('span',{text:it.price}));
+    if(it.priority==='top')m.appendChild(h('span',{class:'pill top',text:'★ Top pick'}));
+    if(url)m.appendChild(h('span',{text:host(url)}));
+    var acts=h('div',{class:'actions'});
+    if(url)acts.appendChild(h('a',{class:'nb primary',href:url,target:'_blank',rel:'noopener noreferrer',text:'View'}));
+    if(claim){
+      acts.appendChild(h('span',{class:'badge',text:'✓ Purchased'+(claim.by?' by '+claim.by:'')}));
+      acts.appendChild(h('button',{class:'nb',text:'Undo',onclick:function(){unclaim(it)}}));
+    }else{
+      acts.appendChild(h('button',{class:'nb',text:'Mark as purchased',onclick:function(){askClaim(it)}}));
+    }
+    return h('div',{class:'item'+(claim?' done':'')},[img,h('div',{class:'body'},[h('h3',{text:it.title||'Untitled'}),m,it.note?h('p',{class:'note',text:it.note}):null,acts])]);
+  }
+
+  function askClaim(it){target=it;$('dlgTitle').textContent='Mark “'+(it.title||'item')+'” as purchased?';$('dlgName').value=lsGet('wl-name');$('dlg').showModal()}
+  $('dlgCancel').addEventListener('click',function(){$('dlg').close()});
+  $('dlgForm').addEventListener('submit',async function(e){
+    e.preventDefault();if(!target)return;
+    var by=$('dlgName').value.trim().slice(0,60);lsSet('wl-name',by);$('dlgOk').disabled=true;
+    var r=await sb.from('claims').insert({item_id:target.id,by:by||null});
+    $('dlg').close();$('dlgOk').disabled=false;
+    if(r.error&&r.error.code!=='23505')setStatus('Could not save. Please try again.',true);
+    await load();
+  });
+  async function unclaim(it){
+    var r=await sb.from('claims').delete().eq('item_id',it.id);
+    if(r.error)setStatus('Could not undo. Please try again.',true);
+    await load();
+  }
+
+  $('tabs').addEventListener('click',function(e){
+    var b=e.target.closest('.tab');if(!b)return;filter=b.dataset.f;
+    [].forEach.call(document.querySelectorAll('.tab'),function(t){t.setAttribute('aria-pressed',t===b?'true':'false')});render();
+  });
+
+  load();
+  document.addEventListener('visibilitychange',function(){if(!document.hidden)load()});
+  setInterval(load,60000);
+})();
+</script>
+</body>
+</html>
