@@ -14,6 +14,7 @@
   <div class="topbar">
     <span class="admin-tag">Admin</span>
     <span style="display:flex;gap:6px;align-items:center">
+      <span id="who" style="font-size:13px;color:var(--mute)"></span>
       <a class="nb" href="index.html" target="_blank" rel="noopener">View public page ↗</a>
       <button class="nb" id="signout" style="display:none">Sign out</button>
     </span>
@@ -72,6 +73,7 @@
     $('login').style.display=session?'none':'';
     $('app').style.display=session?'':'none';
     $('signout').style.display=session?'':'none';
+    $('who').textContent=(session&&session.user&&session.user.email)?('Signed in as '+session.user.email):'';
     if(session){setStatus('');await load()}else setStatus('');
   }
   $('loginForm').addEventListener('submit',async function(e){
@@ -171,7 +173,10 @@
       if(r.error)throw r.error;
       if(newPath&&oldPath)await sb.storage.from('wishlist').remove([oldPath]);
       resetForm();setStatus('Saved.');await load();
-    }catch(err){setStatus('Could not save: '+((err&&err.message)||'unknown error'),true)}
+    }catch(err){
+      var sess=await sb.auth.getSession();var se=sess&&sess.data&&sess.data.session;
+      setStatus('Could not save: '+((err&&err.message)||'unknown error')+(err&&err.code?' ['+err.code+']':'')+' | session: '+(se?(se.user&&se.user.email):'none'),true);
+    }
     btn.disabled=false;
   });
 
